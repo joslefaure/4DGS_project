@@ -132,6 +132,7 @@ def main():
     parser.add_argument("--input_dir", type=str, required=True, help="Directory with input frames")
     parser.add_argument("--calib_dir", type=str, required=True, help="Directory with COLMAP calibration")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
+    parser.add_argument("--num_frames", type=int, default=300, help="Number of frames to process")
     args = parser.parse_args()
     
     # Load calibration
@@ -150,22 +151,19 @@ def main():
     
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Process each frame directory
-    frame_dirs = sorted([d for d in os.listdir(args.input_dir) if os.path.isdir(os.path.join(args.input_dir, d))])
+    # Input structure: input_dir/CAMERA/FRAME.png (e.g., frames/001/0000.png)
+    # Output structure: output_dir/FRAME/images/CAMERA001.png (for V3 training)
     
-    for frame_dir in tqdm(frame_dirs, desc="Processing frames"):
-        frame_input_dir = os.path.join(args.input_dir, frame_dir)
-        frame_output_dir = os.path.join(args.output_dir, frame_dir)
+    for frame_idx in tqdm(range(args.num_frames), desc="Processing frames"):
+        frame_output_dir = os.path.join(args.output_dir, str(frame_idx), "images")
         os.makedirs(frame_output_dir, exist_ok=True)
         
-        # Process each camera
+        # Process each camera for this frame
         for cam_id in CAMERA_IDS:
-            # Find image file
-            for ext in ['.png', '.jpg']:
-                input_path = os.path.join(frame_input_dir, f"{cam_id}{ext}")
-                if os.path.exists(input_path):
-                    break
-            else:
+            # Input: frames/CAMERA/FRAME.png
+            input_path = os.path.join(args.input_dir, cam_id, f"{frame_idx:04d}.png")
+            
+            if not os.path.exists(input_path):
                 continue
             
             # Get camera calibration
@@ -175,7 +173,8 @@ def main():
             camera = name_to_camera[cam_id]
             K, dist = get_undistort_params(camera)
             
-            output_path = os.path.join(frame_output_dir, f"{cam_id}.png")
+            # Output: undistorted/FRAME/images/CAMERA001.png
+            output_path = os.path.join(frame_output_dir, f"{cam_id}001.png")
             undistort_image(input_path, K, dist, output_path)
     
     print(f"\n✅ Undistortion complete. Output: {args.output_dir}")

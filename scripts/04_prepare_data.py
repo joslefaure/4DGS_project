@@ -28,6 +28,7 @@ from config import CAMERA_IDS, NUM_FRAMES
 # COLMAP structures
 CameraModel = namedtuple('CameraModel', ['model_id', 'model_name', 'num_params'])
 Camera = namedtuple('Camera', ['id', 'model', 'width', 'height', 'params'])
+Point3D = namedtuple('Point3D', ['id', 'xyz', 'rgb', 'error', 'image_ids', 'point2D_idxs'])
 Image = namedtuple('Image', ['id', 'qvec', 'tvec', 'camera_id', 'name', 'xys', 'point3D_ids'])
 
 CAMERA_MODELS = {
@@ -90,6 +91,54 @@ def read_images_binary(path):
     return images
 
 
+def read_points3D_binary(path):
+    """Read COLMAP points3D.bin file."""
+    points3D = {}
+    with open(path, 'rb') as f:
+        num_points = struct.unpack('<Q', f.read(8))[0]
+        for _ in range(num_points):
+            point_id = struct.unpack('<Q', f.read(8))[0]
+            xyz = struct.unpack('<3d', f.read(24))
+            rgb = struct.unpack('<3B', f.read(3))
+            error = struct.unpack('<d', f.read(8))[0]
+            track_length = struct.unpack('<Q', f.read(8))[0]
+            image_ids = []
+            point2D_idxs = []
+            for _ in range(track_length):
+                image_id = struct.unpack('<I', f.read(4))[0]
+                point2D_idx = struct.unpack('<I', f.read(4))[0]
+                image_ids.append(image_id)
+                point2D_idxs.append(point2D_idx)
+            points3D[point_id] = Point3D(
+                id=point_id, xyz=np.array(xyz), rgb=np.array(rgb),
+                error=error, image_ids=image_ids, point2D_idxs=point2D_idxs
+            )
+    return points3D
+
+
+def write_points3D_ply(points3D, output_path):
+    """Write points3D to PLY format."""
+    points = list(points3D.values())
+    
+    header = f"""ply
+format binary_little_endian 1.0
+element vertex {len(points)}
+property float x
+property float y
+property float z
+property uchar red
+property uchar green
+property uchar blue
+end_header
+"""
+    
+    with open(output_path, 'wb') as f:
+        f.write(header.encode('utf-8'))
+        for p in points:
+            f.write(struct.pack('<fff', *p.xyz.astype(np.float32)))
+            f.write(struct.pack('<BBB', *p.rgb.astype(np.uint8)))
+
+
 def qvec2rotmat(qvec):
     """Convert quaternion to rotation matrix."""
     q = np.array(qvec)
@@ -112,18 +161,6 @@ def create_transforms_json(images, cameras, frame_images_dir, frame_idx):
     
     frames = []
     
-    # Get first camera for global params
-    first_cam = list(cameras.values())[0]
-    params = first_cam.params
-    
-    if first_cam.model == 'OPENCV':
-        fx, fy, cx, cy = params[0], params[1], params[2], params[3]
-    elif first_cam.model == 'PINHOLE':
-        fx, fy, cx, cy = params[0], params[1], params[2], params[3]
-    else:
-        fx = fy = params[0]
-        cx, cy = params[1], params[2]
-    
     for img in images.values():
         cam_id = img.name.split('.')[0][:3]
         
@@ -136,6 +173,18 @@ def create_transforms_json(images, cameras, frame_images_dir, frame_idx):
         img_path = os.path.join(frame_images_dir, img_name)
         if not os.path.exists(img_path):
             continue
+        
+        # Get camera intrinsics for this specific camera
+        camera = cameras[img.camera_id]
+        params = camera.params
+        
+        if camera.model == 'OPENCV':
+            fx, fy, cx, cy = params[0], params[1], params[2], params[3]
+        elif camera.model == 'PINHOLE':
+            fx, fy, cx, cy = params[0], params[1], params[2], params[3]
+        else:
+            fx = fy = params[0]
+            cx, cy = params[1], params[2]
         
         # Compute transform matrix
         R = qvec2rotmat(img.qvec)
@@ -154,22 +203,19 @@ def create_transforms_json(images, cameras, frame_images_dir, frame_idx):
         transform[:3, :3] = R_inv
         transform[:3, 3] = t_inv
         
+        # V3 expects camera params inside each frame
         frames.append({
             "file_path": f"images/{img_name}",
-            "transform_matrix": transform.tolist()
+            "transform_matrix": transform.tolist(),
+            "w": float(camera.width),
+            "h": float(camera.height),
+            "fl_x": float(fx),
+            "fl_y": float(fy),
+            "cx": float(cx),
+            "cy": float(cy),
         })
     
     transforms = {
-        "w": int(first_cam.width),
-        "h": int(first_cam.height),
-        "fl_x": float(fx),
-        "fl_y": float(fy),
-        "cx": float(cx),
-        "cy": float(cy),
-        "k1": 0.0,  # Undistorted
-        "k2": 0.0,
-        "p1": 0.0,
-        "p2": 0.0,
         "frames": frames
     }
     
@@ -189,8 +235,13 @@ def main():
     cameras = read_cameras_binary(os.path.join(args.calib_dir, "cameras.bin"))
     images = read_images_binary(os.path.join(args.calib_dir, "images.bin"))
     
-    # Copy points3D.bin for initialization
-    points3d_src = os.path.join(args.calib_dir, "points3D.bin")
+    # Load and convert points3D to PLY (V3 expects points3d.ply)
+    points3d_bin = os.path.join(args.calib_dir, "points3D.bin")
+    points3D = None
+    if os.path.exists(points3d_bin):
+        print("Loading points3D...")
+        points3D = read_points3D_binary(points3d_bin)
+        print(f"  Loaded {len(points3D)} 3D points")
     
     # Process each frame
     for frame_idx in tqdm(range(args.num_frames), desc="Preparing frames"):
@@ -229,11 +280,15 @@ def main():
         with open(os.path.join(frame_output_dir, "transforms.json"), 'w') as f:
             json.dump(transforms, f, indent=2)
         
-        # Copy COLMAP files for initialization
-        if os.path.exists(points3d_src):
-            shutil.copy2(points3d_src, os.path.join(sparse_output_dir, "points3D.bin"))
+        # Create points3d.ply (V3 expects this file)
+        if points3D is not None:
+            write_points3D_ply(points3D, os.path.join(frame_output_dir, "points3d.ply"))
+        
+        # Copy COLMAP files for reference
         shutil.copy2(os.path.join(args.calib_dir, "cameras.bin"), os.path.join(sparse_output_dir, "cameras.bin"))
         shutil.copy2(os.path.join(args.calib_dir, "images.bin"), os.path.join(sparse_output_dir, "images.bin"))
+        if os.path.exists(points3d_bin):
+            shutil.copy2(points3d_bin, os.path.join(sparse_output_dir, "points3D.bin"))
     
     print(f"\n✅ Data preparation complete. Output: {args.output_dir}")
 

@@ -45,14 +45,16 @@ echo "[Step 3/5] Undistorting Images..."
 python "$SCRIPT_DIR/scripts/03_undistort_images.py" \
     --input_dir "$OUTPUT_DIR/frames" \
     --calib_dir "$DATA_DIR/cali+bg/0" \
-    --output_dir "$OUTPUT_DIR/undistorted"
+    --output_dir "$OUTPUT_DIR/undistorted" \
+    --num_frames 10
 
 # Step 4: Prepare Training Data
 echo "[Step 4/5] Preparing Training Data..."
 python "$SCRIPT_DIR/scripts/04_prepare_data.py" \
     --input_dir "$OUTPUT_DIR/undistorted" \
     --calib_dir "$DATA_DIR/cali+bg/0" \
-    --output_dir "$OUTPUT_DIR/processed"
+    --output_dir "$OUTPUT_DIR/processed" \
+    --num_frames 10
 
 # Step 5: Train Model
 echo "[Step 5/5] Training Model..."
