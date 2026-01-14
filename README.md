@@ -129,6 +129,6 @@ WHITE_BACKGROUND = True
 
 ## Acknowledgments
 
-- [V³ Framework](https://github.com/pxxxl/V3) - SIGGRAPH Asia 2024
+- [V³ Framework](https://github.com/AuthorityWang/VideoGS)
 - [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
 - [BackgroundMattingV2](https://github.com/PeterL1n/BackgroundMattingV2)
